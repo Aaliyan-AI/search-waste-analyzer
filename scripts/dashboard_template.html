@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search Waste Analyzer</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1c2430;--mute:#667085;--line:#e4e7ec;--accent:#2f5fd0;--warn:#b42318;--warnbg:#fef3f2;--soft:#eef2fb}
+@media (prefers-color-scheme:dark){:root{--bg:#10141b;--card:#171c26;--ink:#e8ecf3;--mute:#9aa4b5;--line:#2a3140;--accent:#7aa2ff;--warn:#ffb4a8;--warnbg:#3a1d1a;--soft:#1e2636}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:1200px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:22px;margin:0 0 14px}
+.banner{background:var(--warnbg);color:var(--warn);border:1px solid var(--warn);border-radius:8px;padding:10px 14px;font-weight:600;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:14px}
+.filters{display:flex;flex-wrap:wrap;gap:12px;align-items:end}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mute)}
+select,input{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 8px;min-width:120px}
+.acct{display:flex;flex-wrap:wrap;gap:24px}
+.acct div span{display:block;font-size:12px;color:var(--mute)}
+.tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+.tab{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:8px 16px;cursor:pointer;font:inherit}
+.tab[aria-selected=true]{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.note{color:var(--mute);font-size:12.5px;margin:0 0 10px}
+.stats{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px}
+.stat{background:var(--soft);border-radius:8px;padding:8px 14px;min-width:120px}
+.stat b{display:block;font-size:18px}
+.stat span{font-size:12px;color:var(--mute)}
+table{width:100%;border-collapse:collapse;background:var(--card)}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;color:var(--mute);text-transform:uppercase;letter-spacing:.03em;cursor:pointer;white-space:nowrap;user-select:none;position:sticky;top:0;background:var(--card)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tr.main{cursor:pointer}
+tr.main:hover{background:var(--soft)}
+.unavail{color:var(--mute);font-style:italic}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+.detail td{background:var(--soft);font-size:13px}
+.detail dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:0}
+.detail dt{color:var(--mute)}.detail dd{margin:0}
+.pager{display:flex;gap:10px;align-items:center;justify-content:flex-end;margin-top:10px;flex-wrap:wrap}
+button.pg{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:6px;padding:5px 12px;cursor:pointer}
+button.pg:disabled{opacity:.4;cursor:default}
+.empty{padding:24px;text-align:center;color:var(--mute)}
+.warn{font-size:12.5px;color:var(--mute)}
+.pill{display:inline-block;background:var(--soft);border-radius:999px;padding:1px 8px;font-size:12px;margin-right:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Search Waste Analyzer</h1>
+  <div id="demo"></div>
+  <div class="card filters" id="filters"></div>
+  <div class="card acct" id="acct"></div>
+  <div class="tabs" id="tabs" role="tablist"></div>
+  <p class="note" id="periodnote"></p>
+  <div class="stats" id="stats"></div>
+  <div class="card" style="padding:10px 12px">
+    <div class="filters" id="tablefilters"></div>
+  </div>
+  <div class="tw"><table id="tbl"></table></div>
+  <div class="pager" id="pager"></div>
+  <div class="card" style="margin-top:16px"><div id="caveats" class="warn"></div></div>
+</div>
+<script>
+const DATA = /*__DATA__*/null;
+const COLS = [
+  ["account_name","Account Name"],["account_id","Account ID"],["search_term","Search Term"],
+  ["keyword","Triggering Keyword"],["keyword_match_type","Keyword Match Type"],["clicks","Clicks"],
+  ["spend","Spend"],["conversions","Conversions"],["platform","Platform"]
+];
+const NUMERIC = new Set(["clicks","spend","conversions"]);
+const PERIOD_ORDER = ["7","15","30","90","custom"];
+const S = {platform:"All", account:"__first__", period:null, q:"", minClicks:0, minSpend:0, kwType:"All",
+           size:25, page:0, sort:{key:"spend",dir:-1}, open:new Set()};
+
+function h(tag, attrs, ...kids){
+  const e = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs||{})){
+    if (k==="class") e.className=v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v!==false && v!==null && v!==undefined) e.setAttribute(k,v);
+  }
+  for (const c of kids.flat()){ if (c===null||c===undefined||c===false) continue;
+    e.append(c.nodeType? c : document.createTextNode(String(c))); }
+  return e;
+}
+function money(v, cur){
+  if (v===null||v===undefined) return "Unavailable";
+  try { return new Intl.NumberFormat(undefined,{style:"currency",currency:cur||"USD"}).format(v); }
+  catch(e){ return v.toFixed(2)+(cur?" "+cur:""); }
+}
+function num(v){ return v===null||v===undefined ? "Unavailable" : new Intl.NumberFormat().format(v); }
+
+function accounts(){ return DATA.accounts.filter(a => S.platform==="All" || a.platform===S.platform); }
+function selected(){
+  const list = accounts();
+  if (S.account==="__first__") S.account = list.length ? key(list[0]) : "__all__";
+  if (S.account==="__all__") return list;
+  return list.filter(a => key(a)===S.account);
+}
+function key(a){ return a.platform+"|"+a.account_id+"|"+a.account_name; }
+function periodsAvailable(){
+  const set = new Set();
+  DATA.accounts.forEach(a => Object.keys(a.periods).forEach(p => { if (a.periods[p].has_data || ["7","15","30","90"].includes(p)) set.add(p); }));
+  return PERIOD_ORDER.filter(p => set.has(p));
+}
+
+function render(){
+  const periods = periodsAvailable();
+  if (!S.period || !periods.includes(S.period)) S.period = periods[0];
+  renderDemo(); renderFilters(); renderAcct(); renderTabs(periods); renderTableFilters(); renderTable(); renderCaveats();
+}
+function renderDemo(){
+  const d = document.getElementById("demo"); d.replaceChildren();
+  if (DATA.is_demo) d.append(h("div",{class:"banner"},"DEMO DATA - synthetic numbers for testing. These are not real advertising results."));
+}
+function renderFilters(){
+  const f = document.getElementById("filters"); f.replaceChildren();
+  const plats = ["All", ...new Set(DATA.accounts.map(a=>a.platform))];
+  f.append(h("label",{},"Platform",
+    h("select",{onchange:e=>{S.platform=e.target.value;S.account="__first__";S.page=0;render();}},
+      plats.map(p=>h("option",{value:p,selected:p===S.platform},p)))));
+  const list = accounts();
+  f.append(h("label",{},"Account",
+    h("select",{onchange:e=>{S.account=e.target.value;S.page=0;render();}},
+      list.map(a=>h("option",{value:key(a),selected:key(a)===S.account},a.account_name+" ("+a.account_id+")")),
+      list.length>1 ? h("option",{value:"__all__",selected:S.account==="__all__"},"All accounts (shown separately)") : null)));
+}
+function renderAcct(){
+  const box = document.getElementById("acct"); box.replaceChildren();
+  const sel = selected();
+  if (!sel.length){ box.append("No accounts."); return; }
+  const shown = sel.length>1 ? [{account_name:"All accounts in this view",account_id:sel.length+" accounts",platform:S.platform==="All"?"Both platforms":S.platform,currency:"",timezone:""}] : sel;
+  shown.forEach(a => {
+    ["Account Name:account_name","Account ID:account_id","Platform:platform","Currency:currency","Timezone:timezone"].forEach(x=>{
+      const [label,k]=x.split(":"); if (!a[k]) return;
+      box.append(h("div",{},h("span",{},label),h("b",{},a[k])));
+    });
+  });
+}
+function renderTabs(periods){
+  const t = document.getElementById("tabs"); t.replaceChildren();
+  periods.forEach(p => t.append(h("button",{class:"tab",role:"tab","aria-selected":p===S.period,
+    onclick:()=>{S.period=p;S.page=0;S.open.clear();render();}}, p==="custom"?"Custom period":p+" Days")));
+}
+function currentRows(){
+  const out = [];
+  selected().forEach(a => {
+    const p = a.periods[S.period]; if (!p) return;
+    p.rows.forEach(r => out.push({r, a, p}));
+  });
+  return out;
+}
+function renderTable(){
+  const sel = selected();
+  const note = document.getElementById("periodnote");
+  const first = sel.length ? sel[0].periods[S.period] : null;
+  note.textContent = first ? ("Date range: "+first.date_start+" to "+first.date_end+" (completed days only). Zero conversions applies to this period only. Recent days can still receive conversions later.") : "";
+
+  const stats = document.getElementById("stats"); stats.replaceChildren();
+  sel.forEach(a => {
+    const p = a.periods[S.period]; if (!p) return;
+    const s = p.summary;
+    const line = [["Zero-conversion terms",num(s.terms)],["Clicks",num(s.clicks)],["Spend",money(s.spend,a.currency)],
+                  ["Keyword known",s.keyword_coverage_pct===null?"n/a":s.keyword_coverage_pct+"% of clicks"]];
+    if (sel.length>1) stats.append(h("div",{style:"width:100%;font-weight:600"},a.account_name));
+    line.forEach(([l,v])=>stats.append(h("div",{class:"stat"},h("b",{},v),h("span",{},l))));
+    if (!p.has_data) stats.append(h("div",{class:"stat"},h("b",{},"No data"),h("span",{},"nothing was supplied for this period")));
+  });
+
+  let rows = currentRows().filter(({r}) =>
+    r.clicks>=S.minClicks && (r.spend||0)>=S.minSpend && (S.kwType==="All"||r.keyword_match_type===S.kwType) &&
+    (!S.q || (r.search_term+" "+r.keyword).toLowerCase().includes(S.q.toLowerCase())));
+  const k = S.sort.key, d = S.sort.dir;
+  rows.sort((x,y)=>{ const a=x.r[k], b=y.r[k];
+    if (a===b) return 0; if (a===null||a===undefined) return 1; if (b===null||b===undefined) return -1;
+    return (typeof a==="number" ? a-b : String(a).localeCompare(String(b)))*d; });
+  const pages = Math.max(1, Math.ceil(rows.length/S.size));
+  if (S.page>=pages) S.page = pages-1;
+  const slice = rows.slice(S.page*S.size, (S.page+1)*S.size);
+
+  const tbl = document.getElementById("tbl"); tbl.replaceChildren();
+  tbl.append(h("thead",{},h("tr",{}, COLS.map(([key,label])=>
+    h("th",{class:NUMERIC.has(key)?"num":"",onclick:()=>{S.sort = {key, dir:S.sort.key===key?-S.sort.dir:(NUMERIC.has(key)?-1:1)};renderTable();}},
+      label+(S.sort.key===key?(S.sort.dir>0?" ▲":" ▼"):""))))));
+  const tb = h("tbody",{});
+  if (!slice.length) tb.append(h("tr",{},h("td",{colspan:9,class:"empty"},"No search terms match: either none had clicks with zero conversions in this period, or your filters hide them.")));
+  slice.forEach(({r,a},i) => {
+    const id = key(a)+"|"+r.search_term+"|"+r.keyword+"|"+r.details.campaign+"|"+r.details.ad_group;
+    const isOpen = S.open.has(id);
+    const kwCell = r.keyword==="Unavailable" ? h("span",{class:"unavail",title:r.details.keyword_note},"Unavailable") : r.keyword;
+    const mtCell = r.keyword_match_type==="Unavailable" ? h("span",{class:"unavail",title:r.details.keyword_note},"Unavailable") : r.keyword_match_type;
+    tb.append(h("tr",{class:"main",onclick:()=>{isOpen?S.open.delete(id):S.open.add(id);renderTable();}},
+      h("td",{},r.account_name),h("td",{},r.account_id),
+      h("td",{},(isOpen?"▾ ":"▸ ")+r.search_term),
+      h("td",{},kwCell),h("td",{},mtCell),
+      h("td",{class:"num"},num(r.clicks)),h("td",{class:"num"},money(r.spend,a.currency)),
+      h("td",{class:"num"},num(r.conversions)),h("td",{},r.platform)));
+    if (isOpen) tb.append(detailRow(r,a));
+  });
+  tbl.append(tb);
+
+  const pg = document.getElementById("pager"); pg.replaceChildren();
+  pg.append(h("span",{class:"warn"},rows.length+" terms"),
+    h("button",{class:"pg",disabled:S.page===0,onclick:()=>{S.page--;renderTable();}},"Previous"),
+    h("span",{},"Page "+(S.page+1)+" of "+pages),
+    h("button",{class:"pg",disabled:S.page>=pages-1,onclick:()=>{S.page++;renderTable();}},"Next"));
+}
+function renderTableFilters(){
+  const tf = document.getElementById("tablefilters"); tf.replaceChildren();
+  tf.append(
+    h("label",{},"Search",h("input",{type:"search",value:S.q,placeholder:"search term, keyword...",oninput:e=>{S.q=e.target.value;S.page=0;renderTable();}})),
+    h("label",{},"Min. clicks",h("input",{type:"number",min:0,value:S.minClicks,style:"min-width:80px",onchange:e=>{S.minClicks=+e.target.value||0;S.page=0;renderTable();}})),
+    h("label",{},"Min. spend",h("input",{type:"number",min:0,step:"0.5",value:S.minSpend,style:"min-width:80px",onchange:e=>{S.minSpend=+e.target.value||0;S.page=0;renderTable();}})),
+    h("label",{},"Keyword match type",h("select",{onchange:e=>{S.kwType=e.target.value;S.page=0;renderTable();}},
+      ["All","Exact","Phrase","Broad","Unavailable"].map(v=>h("option",{value:v,selected:v===S.kwType},v)))),
+    h("label",{},"Rows per page",h("select",{onchange:e=>{S.size=+e.target.value;S.page=0;renderTable();}},
+      [25,50,100].map(v=>h("option",{value:v,selected:v===S.size},v))))
+  );
+
+}
+function detailRow(r,a){
+  const d = r.details;
+  const by = Object.entries(d.term_conversions_by_period).filter(([k])=>k!=="custom")
+    .map(([k,v])=>h("span",{class:"pill"},k+"d: "+(v===null?"no data":v)));
+  const others = d.same_term_other_rows.length
+    ? d.same_term_other_rows.map(o=>h("div",{},"keyword: "+o.keyword+" · ad group: "+(o.ad_group||"-")+" · clicks: "+o.clicks+" · conversions: "+(o.conversions===null?"unknown":o.conversions)))
+    : "none";
+  return h("tr",{class:"detail"},h("td",{colspan:9},h("dl",{},
+    h("dt",{},"Campaign"),h("dd",{},d.campaign+" ("+d.campaign_type+")"),
+    h("dt",{},"Ad group"),h("dd",{},d.ad_group),
+    h("dt",{},"Impressions"),h("dd",{},num(d.impressions)),
+    h("dt",{},"Average CPC"),h("dd",{},money(d.avg_cpc,a.currency)),
+    h("dt",{},"Search term match type"),h("dd",{},d.search_term_match_type),
+    h("dt",{},"Term status"),h("dd",{},d.term_status),
+    h("dt",{},"Keyword note"),h("dd",{},d.keyword_note||"The platform returned this keyword."),
+    h("dt",{},"Same term, all rows, by period"),h("dd",{},by),
+    h("dt",{},"Same term in other rows (this period)"),h("dd",{},others))));
+}
+function renderCaveats(){
+  const c = document.getElementById("caveats"); c.replaceChildren();
+  c.append(h("div",{style:"font-weight:600;margin-bottom:4px"},"Read this before acting on the list"));
+  DATA.caveats.forEach(t=>c.append(h("div",{},"• "+t)));
+  if (DATA.warnings.length){
+    c.append(h("div",{style:"font-weight:600;margin:8px 0 4px"},"Data warnings"));
+    DATA.warnings.forEach(t=>c.append(h("div",{},"• "+t)));
+  }
+  c.append(h("div",{style:"margin-top:8px"},"Report date "+DATA.today+". Read-only analysis: nothing was changed in any advertising account."));
+}
+render();
+</script>
+</body>
+</html>
